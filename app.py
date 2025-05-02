@@ -71,31 +71,35 @@ def load_data():
         df.columns = df.columns.str.strip().str.lower()
         
         # ====== Add Diet Classification Here ======
+        # ====== Add Diet Classification Here ======
+        # In the load_data() function, update the diet classification:
         if 'diet' not in df.columns:
             # Create empty diet column first
-            df['diet'] = 'Non-Veg'  # default
+            df['diet'] = 'Nonvegetarian'  # default
             
-            # Define ingredient patterns for each diet type
-            non_veg_pattern = r'\b(chicken|meat|beef|pork|fish|mutton|lamb|seafood|egg|eggs|bacon|sausage|ham)\b'
-            vegan_pattern = r'\b(dairy|milk|cheese|yogurt|butter|cream|honey|egg|eggs)\b'
+            # Define comprehensive lists of non-veg ingredients (now including eggs)
+            non_veg_ingredients = [
+                'chicken', 'meat', 'beef', 'pork', 'fish', 'mutton', 'lamb', 
+                'seafood', 'egg', 'eggs', 'bacon', 'sausage', 'ham', 'shrimp',
+                'prawn', 'crab', 'turkey', 'duck', 'goose', 'venison', 'animal'
+            ]
             
-            # First mark vegetarian (includes dairy/eggs)
-            veg_conditions = (
-                ~df['cleaned_ingredients'].str.lower().str.contains(non_veg_pattern, regex=True)
+            dairy_ingredients = [
+                'milk', 'cheese', 'yogurt', 'butter', 'cream', 'ghee', 'curd',
+                'paneer', 'dairy', 'whey', 'casein'
+            ]
+            
+            # Mark vegetarian (no meat/eggs but may contain dairy)
+            veg_mask = ~df['cleaned_ingredients'].str.lower().str.contains(
+                '|'.join(non_veg_ingredients), regex=True
             )
-            df.loc[veg_conditions, 'diet'] = 'Vegetarian'
+            df.loc[veg_mask, 'diet'] = 'Vegetarian'
             
-            # Then identify vegan (no animal products at all)
-            vegan_conditions = (
-                veg_conditions & 
-                ~df['cleaned_ingredients'].str.lower().str.contains(vegan_pattern, regex=True)
+            # Mark vegan (no animal products at all - no meat, eggs, or dairy)
+            vegan_mask = veg_mask & ~df['cleaned_ingredients'].str.lower().str.contains(
+                '|'.join(dairy_ingredients + ['honey']), regex=True
             )
-            df.loc[vegan_conditions, 'diet'] = 'Vegan'
-            
-            # Special case for desserts/sweets that might be vegetarian
-            dessert_keywords = ['cake', 'cookie', 'dessert', 'sweet', 'pie', 'pastry']
-            dessert_mask = df['title'].str.lower().str.contains('|'.join(dessert_keywords))
-            df.loc[dessert_mask & (df['diet'] == 'Non-Veg'), 'diet'] = 'Vegetarian'
+            df.loc[vegan_mask, 'diet'] = 'Vegan'
         # ====== End of Diet Classification ======
         
         if 'image' in df.columns:
@@ -120,38 +124,101 @@ def load_data():
 df = load_data()
 
 # ========== Helper Functions ==========
-def filter_recipe(cuisine_type, diet_type, meal_type, taste_profile):
+def filter_recipe(cuisine_type, diet_type, meal_type, taste_profile, ingredients_input=""):
     filtered_df = df.copy()
     
+    # --- 1. Standardize diet_type (fix typos like "Non-Vegetarain") ---
+    diet_type = diet_type.lower().replace("-", "").replace(" ", "")
+    if "nonveg" in diet_type or "nonvegetarian" in diet_type:
+        diet_type = "nonvegetarian"
+    elif "veg" in diet_type and "vegan" not in diet_type:
+        diet_type = "vegetarian"
+    
+    # --- 2. Cuisine Filter ---
     if cuisine_type != "Any" and "cuisine" in df.columns:
-        filtered_df = filtered_df[filtered_df["cuisine"] == cuisine_type]
-        
-    if diet_type != "Any" and "diet" in df.columns:
-        # Convert both to lowercase for case-insensitive comparison
-        filtered_df = filtered_df[filtered_df["diet"].str.lower() == diet_type.lower()]
-        
-        # Additional check for vegetarian - exclude non-veg ingredients
-        if diet_type.lower() == "vegetarian":
-            non_veg_ingredients = ['chicken', 'beef', 'pork', 'lamb', 'fish', 'meat', 'seafood']
-            pattern = '|'.join(non_veg_ingredients)
+        filtered_df = filtered_df[filtered_df["cuisine"].str.lower() == cuisine_type.lower()]
+    
+    # --- 3. Diet Filter (BRUTE-FORCE ENFORCEMENT) ---
+    if diet_type != "any":
+        # VEGETARIAN: No meat/fish/eggs
+        if diet_type == "vegetarian":
             filtered_df = filtered_df[
-                ~filtered_df["cleaned_ingredients"].str.lower().str.contains(pattern)
+                ~filtered_df["cleaned_ingredients"].str.contains(
+                    r'(chicken|meat|beef|pork|fish|mutton|lamb|seafood|egg|shrimp)s?',
+                    case=False, regex=True, na=False
+                )
             ]
-            
+        
+        # VEGAN: No animal products at all
+        elif diet_type == "vegan":
+            filtered_df = filtered_df[
+                ~filtered_df["cleaned_ingredients"].str.contains(
+                    r'(meat|fish|egg|milk|cheese|yogurt|butter|cream|ghee|paneer|honey)',
+                    case=False, regex=True, na=False
+                )
+            ]
+        
+        # NON-VEGETARIAN: MUST contain meat/fish/eggs, NO veg ingredients
+        elif diet_type == "nonvegetarian":
+            # Step 1: Must have meat/fish/eggs
+            filtered_df = filtered_df[
+                filtered_df["cleaned_ingredients"].str.contains(
+                    r'(chicken|meat|beef|pork|fish|mutton|lamb|seafood|egg)s?',
+                    case=False, regex=True, na=False
+                )
+            ]
+            # Step 2: Remove ANY veg contamination (even in title)
+            filtered_df = filtered_df[
+                ~filtered_df["title"].str.contains(
+                    r'(paneer|tofu|vegetarian|vegan)',
+                    case=False, regex=True, na=False
+                )
+            ]
+            # Step 3: Purge veg ingredients (even if user searches for them)
+            filtered_df = filtered_df[
+                ~filtered_df["cleaned_ingredients"].str.contains(
+                    r'(paneer|tofu|soy)',
+                    case=False, regex=True, na=False
+                )
+            ]
+    
+    # --- 4. Other Filters (Meal Type, Taste) ---
     if meal_type != "Any" and "meal_type" in df.columns:
         filtered_df = filtered_df[filtered_df["meal_type"].str.lower() == meal_type.lower()]
-        
     if taste_profile != "Any" and "taste_profile" in df.columns:
         filtered_df = filtered_df[filtered_df["taste_profile"].str.lower() == taste_profile.lower()]
-        
     
+    # --- 5. Ingredients Filter (Diet-Aware) ---
+    if ingredients_input:
+        ingredients = [ing.strip().lower() for ing in ingredients_input.split(",") if ing.strip()]
+        # NON-VEG MODE: IGNORE vegetarian ingredients (even if searched)
+        if diet_type == "nonvegetarian":
+            ingredients = [ing for ing in ingredients if ing not in ["paneer", "tofu", "soy"]]
+            if not ingredients:  # Only veg ingredients were entered
+                return pd.DataFrame()  # Return empty
         
+        for ing in ingredients:
+            filtered_df = filtered_df[
+                filtered_df["cleaned_ingredients"].str.contains(
+                    ing, case=False, regex=False, na=False
+                )
+            ]
     
     return filtered_df
 
-def smart_ingredient_suggestions(user_input, all_ingredients_list):
+def smart_ingredient_suggestions(user_input, all_ingredients_list, diet_type="Any"):
     if not user_input:
         return []
+    
+    # Filter out non-veg ingredients if vegetarian/vegan is selected
+    if diet_type.lower() in ["vegetarian", "vegan"]:
+        non_veg_ings = ["chicken", "meat", "beef", "pork", "fish", "mutton", 
+                       "lamb", "seafood", "egg", "bacon", "sausage"]
+        all_ingredients_list = [
+            ing for ing in all_ingredients_list 
+            if not any(non_veg in ing.lower() for non_veg in non_veg_ings)
+        ]
+    
     matches = process.extract(user_input.lower(), all_ingredients_list, limit=5)
     return [match[0] for match in matches if match[1] > 70]
 
@@ -362,7 +429,7 @@ def recipe_suggestions_page():
             cuisine_type = st.selectbox("Select Cuisine Type", 
                                       ["Any"] + sorted(df["cuisine"].dropna().unique()))
             diet_type = st.selectbox("Select Diet Type", 
-                        ["Any", "Vegetarian", "Vegan", "Non-Veg"])
+                        ["Any", "Vegetarian", "Vegan", "Non-Vegetarain"])
             meal_type = st.selectbox("Select Meal Type", 
                                     ["Any", "Breakfast", "Lunch", "Dinner", "Snack", "Dessert"])
             
