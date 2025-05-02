@@ -1,0 +1,7 @@
+streamlit
+pandas
+fuzzywuzzy
+python-Levenshtein
+SpeechRecognition
+Pillow
+streamlit-option-menu
